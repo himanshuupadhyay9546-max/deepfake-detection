@@ -1,12 +1,12 @@
-torch>=2.0.0
-torchvision>=0.15.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.0.1+cpu
+torchvision==0.15.2+cpu
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
-opencv-python>=4.9.0
+opencv-python-headless>=4.9.0
 Pillow>=10.2.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
-matplotlib>=3.8.0
 tqdm>=4.66.0
 pydantic>=2.6.0
