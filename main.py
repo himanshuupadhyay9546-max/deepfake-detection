@@ -14,6 +14,8 @@ import argparse
 import json
 import sys
 import logging
+import os
+import uvicorn
 from pathlib import Path
 
 logging.basicConfig(
@@ -22,7 +24,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
 
 def cmd_train(args):
     from src.train import Trainer, DeepfakeDataset, get_default_config
@@ -44,7 +45,6 @@ def cmd_train(args):
     history = trainer.train(train_set, val_set)
 
     logger.info(f"Best Val AUC: {max(history['val_auc']):.4f}")
-
 
 def cmd_eval(args):
     from src.inference import DeepfakeInference
@@ -73,7 +73,6 @@ def cmd_eval(args):
     with open(out_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
     logger.info(f"Metrics saved to {out_dir}/metrics.json")
-
 
 def cmd_predict(args):
     from src.inference import DeepfakeInference
@@ -108,7 +107,6 @@ def cmd_predict(args):
     print(f"  │  Confidence  : {result.confidence:.4f}")
     print(f"  └───────────────────────────────────────\n")
 
-
 def cmd_prepare(args):
     from utils.preprocessing import build_manifest, validate_dataset
 
@@ -125,18 +123,11 @@ def cmd_prepare(args):
     for split, data in splits.items():
         print(f"  {split}: {len(data)} samples")
 
-
 def cmd_serve(args):
-    import uvicorn
-    logger.info(f"Starting API server on port {args.port}...")
-    import os
+    # Dynamic Port Fix for Railway/Cloud Deployment
     port = int(os.environ.get("PORT", args.port))
+    logger.info(f"Starting API server on port {port}...")
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=args.dev)
-
-
-# ─────────────────────────────────────────
-#  CLI Parser
-# ─────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -145,34 +136,29 @@ def main():
     )
     sub = parser.add_subparsers(dest="command")
 
-    # train
     p_train = sub.add_parser("train", help="Train the model")
-    p_train.add_argument("--data_dir",   required=True)
-    p_train.add_argument("--epochs",     type=int,   default=30)
-    p_train.add_argument("--batch_size", type=int,   default=32)
-    p_train.add_argument("--lr",         type=float, default=1e-4)
-    p_train.add_argument("--save_dir",   default="checkpoints")
+    p_train.add_argument("--data_dir",  required=True)
+    p_train.add_argument("--epochs",    type=int,  default=30)
+    p_train.add_argument("--batch_size", type=int,  default=32)
+    p_train.add_argument("--lr",        type=float, default=1e-4)
+    p_train.add_argument("--save_dir",  default="checkpoints")
 
-    # eval
     p_eval = sub.add_parser("eval", help="Evaluate on test set")
     p_eval.add_argument("--data_dir",    required=True)
     p_eval.add_argument("--model",       default="checkpoints/best_model.pth")
     p_eval.add_argument("--output_dir",  default="results")
 
-    # predict
     p_pred = sub.add_parser("predict", help="Predict on single file")
-    p_pred.add_argument("--input",       required=True)
-    p_pred.add_argument("--model",       default="checkpoints/best_model.pth")
+    p_pred.add_argument("--input",      required=True)
+    p_pred.add_argument("--model",      default="checkpoints/best_model.pth")
     p_pred.add_argument("--no_heatmap",  action="store_true")
     p_pred.add_argument("--save_heatmap", default="heatmap.jpg")
 
-    # prepare
     p_prep = sub.add_parser("prepare", help="Prepare dataset manifests")
     p_prep.add_argument("--data_dir",    required=True)
-    p_prep.add_argument("--val_split",   type=float, default=0.15)
-    p_prep.add_argument("--test_split",  type=float, default=0.10)
+    p_prep.add_argument("--val_split",  type=float, default=0.15)
+    p_prep.add_argument("--test_split", type=float, default=0.10)
 
-    # serve
     p_srv = sub.add_parser("serve", help="Start REST API server")
     p_srv.add_argument("--port",  type=int, default=8000)
     p_srv.add_argument("--dev",   action="store_true")
@@ -180,7 +166,7 @@ def main():
     args = parser.parse_args()
 
     dispatch = {
-        "train":   cmd_train,
+        "train":  cmd_train,
         "eval":    cmd_eval,
         "predict": cmd_predict,
         "prepare": cmd_prepare,
@@ -192,7 +178,6 @@ def main():
         sys.exit(1)
 
     dispatch[args.command](args)
-
 
 if __name__ == "__main__":
     main()
