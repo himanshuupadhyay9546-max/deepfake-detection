@@ -171,6 +171,13 @@ class DeepfakeInference:
             if "model_state" in state:
                 state = state["model_state"]
             self.model.load_state_dict(state)
+            import logging; logging.getLogger(__name__).info("Loaded trained checkpoint: %s", model_path)
+        else:
+            import logging; logging.getLogger(__name__).warning(
+                "⚠️  No trained checkpoint found at '%s'. "
+                "Model is using untrained weights — predictions will be unreliable. "
+                "Train the model first with: python src/train.py", model_path
+            )
         self.model.to(self.device).eval()
 
         self.transform = get_transform(image_size)
@@ -232,10 +239,13 @@ class DeepfakeInference:
                 out = self.model(tensor)
 
         prob = out["probability"].item()
-        conf = abs(prob - 0.5) * 2
+        # Use threshold 0.4 instead of 0.5 to reduce false negatives (fakes shown as real)
+        FAKE_THRESHOLD = 0.4
+        conf = abs(prob - FAKE_THRESHOLD) * (1 / (1 - FAKE_THRESHOLD) if prob >= FAKE_THRESHOLD else 1 / FAKE_THRESHOLD)
+        conf = min(conf, 1.0)
 
         return DetectionResult(
-            label="FAKE" if prob > 0.5 else "REAL",
+            label="FAKE" if prob > FAKE_THRESHOLD else "REAL",
             probability=prob,
             confidence=conf,
             heatmap=heatmap_overlay,
@@ -279,10 +289,12 @@ class DeepfakeInference:
 
         probs = [r["probability"] for r in frame_results]
         avg_prob = float(np.mean(probs))
-        conf = float(abs(avg_prob - 0.5) * 2)
+        FAKE_THRESHOLD = 0.4
+        conf = float(abs(avg_prob - FAKE_THRESHOLD) * 2)
+        conf = min(conf, 1.0)
 
         return DetectionResult(
-            label="FAKE" if avg_prob > 0.5 else "REAL",
+            label="FAKE" if avg_prob > FAKE_THRESHOLD else "REAL",
             probability=avg_prob,
             confidence=conf,
             frame_results=frame_results,
