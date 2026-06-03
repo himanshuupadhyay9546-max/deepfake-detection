@@ -844,11 +844,9 @@
         const data = await res.json();
         showResult(data, Date.now() - t0);
       } catch (err) {
-        // Fallback demo result if API unavailable
-        await sleep(1200);
-        const isFake = Math.random() > .5;
-        const prob = isFake ? (.6 + Math.random() * .35) : (.05 + Math.random() * .3);
-        showResult({ label: prob > .5 ? 'FAKE' : 'REAL', probability: prob, confidence: Math.abs(prob - .5) * 2 }, Date.now() - t0);
+        document.getElementById('result-loading').style.display = 'none';
+        document.getElementById('result-empty').style.display = 'block';
+        showError(err.message || 'Server unavailable. Please check the API is running and try again.');
       }
       btn.disabled = false; btn.textContent = '▶ Re-Analyze';
     }
@@ -929,6 +927,15 @@
       document.getElementById('result-body').style.display = 'none';
       mode = 'image';
       c.toBlob(b => { currentFile = new File([b], 'demo.jpg', { type: 'image/jpeg' }); analyze() });
+    }
+
+    function showError(msg) {
+      const empty = document.getElementById('result-empty');
+      empty.style.display = 'block';
+      empty.innerHTML = `
+        <div class="icon" style="font-size:40px;opacity:1">⚠️</div>
+        <p style="color:var(--red);font-weight:600;margin-bottom:8px">Analysis Failed</p>
+        <p style="font-size:13px">${msg}</p>`;
     }
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }

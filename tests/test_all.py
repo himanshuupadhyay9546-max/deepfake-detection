@@ -103,6 +103,16 @@ class TestInference:
         for r in results:
             assert r.label in {"REAL", "FAKE"}
 
+    def test_predict_image_with_heatmap(self):
+        from src.inference import DeepfakeInference
+        engine = DeepfakeInference(generate_heatmap=True)
+        img = self._make_dummy_image()
+        result = engine.predict_image(img, crop_face=False)
+        assert result.label in {"REAL", "FAKE"}
+        assert 0 <= result.probability <= 1
+        assert result.heatmap is not None
+        assert result.heatmap.shape == (224, 224, 3)
+
 
 # ─────────────────────────────────────────
 #  Metrics Tests

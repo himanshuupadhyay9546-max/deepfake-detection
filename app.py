@@ -10,8 +10,11 @@ Endpoints:
 
 import io
 import time
+import uuid
 import base64
+import asyncio
 import logging
+import tempfile
 from pathlib import Path
 from typing import Optional
 from collections import defaultdict
@@ -39,9 +42,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # ── Load Model ─────────────────────────────────────────────
@@ -59,6 +62,11 @@ stats["total"] = 0
 stats["fake"]  = 0
 stats["real"]  = 0
 stats["errors"]= 0
+stats_lock = asyncio.Lock()
+
+# ── Upload Size Limits ─────────────────────────────────────
+MAX_IMAGE_SIZE = 20 * 1024 * 1024   # 20 MB
+MAX_VIDEO_SIZE = 200 * 1024 * 1024  # 200 MB
 
 
 # ── Pydantic Models ────────────────────────────────────────
@@ -116,7 +124,7 @@ async def health():
     return {
         "status": "ok",
         "device": str(engine.device),
-        "model_loaded": True,
+        "model_loaded": MODEL_PATH.exists(),
     }
 
 
@@ -145,6 +153,9 @@ async def detect_image(
     t0 = time.time()
     try:
         contents = await file.read()
+        if len(contents) > MAX_IMAGE_SIZE:
+            raise HTTPException(status_code=413, detail="Image too large. Maximum allowed size is 20 MB.")
+
         img = Image.open(io.BytesIO(contents)).convert("RGB")
         result = engine.predict_image(img, crop_face=crop_face)
 
@@ -152,18 +163,22 @@ async def detect_image(
         if return_heatmap and result.heatmap is not None:
             heatmap_b64 = ndarray_to_b64(result.heatmap)
 
-        stats["total"] += 1
-        stats["fake" if result.is_fake else "real"] += 1
+        async with stats_lock:
+            stats["total"] += 1
+            stats["fake" if result.is_fake else "real"] += 1
 
         return {
             **result.to_dict(),
             "heatmap_b64": heatmap_b64,
             "processing_time_ms": (time.time() - t0) * 1000,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        stats["errors"] += 1
-        logger.error(f"Image detection error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        async with stats_lock:
+            stats["errors"] += 1
+        logger.error(f"Image detection error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.")
 
 
 @app.post("/api/detect/video", response_model=VideoDetectionResponse)
@@ -176,10 +191,18 @@ async def detect_video(
     if not file.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="File must be a video.")
 
+    # Clamp query params to safe bounds
+    frame_interval = max(1, frame_interval)
+    max_frames     = max(1, min(max_frames, 100))
+
     t0 = time.time()
-    tmp_path = Path(f"/tmp/upload_{int(time.time())}_{file.filename}")
+    # Safe temp file — uuid only, no user-supplied filename
+    tmp_path = Path(tempfile.gettempdir()) / f"{uuid.uuid4().hex}.tmp"
     try:
         contents = await file.read()
+        if len(contents) > MAX_VIDEO_SIZE:
+            raise HTTPException(status_code=413, detail="Video too large. Maximum allowed size is 200 MB.")
+
         tmp_path.write_bytes(contents)
 
         result = engine.predict_video(
@@ -189,8 +212,9 @@ async def detect_video(
             crop_face=crop_face,
         )
 
-        stats["total"] += 1
-        stats["fake" if result.is_fake else "real"] += 1
+        async with stats_lock:
+            stats["total"] += 1
+            stats["fake" if result.is_fake else "real"] += 1
 
         return {
             **result.to_dict(),
@@ -198,10 +222,13 @@ async def detect_video(
             "frame_results": result.frame_results,
             "processing_time_ms": (time.time() - t0) * 1000,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        stats["errors"] += 1
-        logger.error(f"Video detection error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        async with stats_lock:
+            stats["errors"] += 1
+        logger.error(f"Video detection error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.")
     finally:
         if tmp_path.exists():
             tmp_path.unlink()

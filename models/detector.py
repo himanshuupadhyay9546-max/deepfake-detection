@@ -175,7 +175,7 @@ class EnsembleDetector:
         self.models = []
         for path in model_paths:
             m = DeepfakeDetector(pretrained=False)
-            m.load_state_dict(torch.load(path, map_location=device))
+            m.load_state_dict(torch.load(path, map_location=device, weights_only=True))
             m.eval()
             self.models.append(m)
 

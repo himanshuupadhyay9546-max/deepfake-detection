@@ -7,6 +7,7 @@ Data Preprocessing & Augmentation Utilities
 - Data validation
 """
 
+import io
 import os
 import json
 import random
@@ -149,7 +150,10 @@ def validate_dataset(data_dir: str) -> Dict:
         folder = data_dir / cls
         if not folder.exists():
             continue
-        for p in folder.rglob("*.jpg"):
+        exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        for p in folder.rglob("*"):
+            if p.suffix.lower() not in exts:
+                continue
             report["total"] += 1
             report[cls] += 1
             try:
@@ -179,7 +183,7 @@ class DeepfakeAugmentor:
 
     @staticmethod
     def add_compression_artifacts(img: Image.Image, quality: int = 50) -> Image.Image:
-        buf = __import__("io").BytesIO()
+        buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality)
         buf.seek(0)
         return Image.open(buf).convert("RGB")

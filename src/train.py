@@ -14,8 +14,8 @@ from typing import Dict, Optional, List
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torchvision.transforms as T
 from PIL import Image
@@ -51,20 +51,38 @@ class DeepfakeDataset(Dataset):
         split: str = "train",
         image_size: int = 224,
         augment: bool = True,
+        manifest: Optional[str] = None,
     ):
         self.root = Path(root)
         self.split = split
         self.image_size = image_size
+        self._manifest_override = manifest
 
         self.samples: List[Dict] = self._load_samples()
         self.transform = self._build_transform(augment and split == "train")
 
     def _load_samples(self) -> List[Dict]:
-        manifest = self.root / "manifest.json"
-        if manifest.exists():
-            with open(manifest) as f:
-                return json.load(f)
+        # 1. Explicit manifest path override
+        if self._manifest_override and Path(self._manifest_override).exists():
+            with open(self._manifest_override) as f:
+                data = json.load(f)
+            logger.info(f"Loaded {len(data)} samples from manifest: {self._manifest_override}")
+            return data
 
+        # 2. Auto-detect manifest_<split>.json next to root
+        root_parent = self.root.parent if not self.root.is_dir() else self.root
+        for candidate in [
+            root_parent / f"manifest_{self.split}.json",
+            self.root / f"manifest_{self.split}.json",
+            self.root / "manifest.json",
+        ]:
+            if candidate.exists():
+                with open(candidate) as f:
+                    data = json.load(f)
+                logger.info(f"Loaded {len(data)} samples from {candidate}")
+                return data
+
+        # 3. Fallback: scan real/ fake/ subfolders
         samples = []
         for label, cls in enumerate(["real", "fake"]):
             folder = self.root / cls
@@ -109,7 +127,8 @@ class DeepfakeDataset(Dataset):
 
     def get_class_weights(self) -> torch.Tensor:
         labels = [s["label"] for s in self.samples]
-        counts = np.bincount(labels)
+        counts = np.bincount(labels, minlength=2)          # always length-2
+        counts = np.where(counts == 0, 1, counts)          # avoid division by zero
         weights = 1.0 / counts
         sample_weights = torch.tensor([weights[l] for l in labels], dtype=torch.float32)
         return sample_weights
@@ -134,7 +153,7 @@ class FocalLoss(nn.Module):
         return focal.mean()
 
 
-import torch.nn.functional as F
+# torch.nn.functional imported as F at top of file
 
 
 # ─────────────────────────────────────────
@@ -172,7 +191,9 @@ class Trainer:
             alpha=config.get("focal_alpha", 0.25),
             gamma=config.get("focal_gamma", 2.0),
         )
-        self.scaler = GradScaler()
+        # CPU-safe scaler and autocast
+        self._device_type = "cuda" if torch.cuda.is_available() else "cpu"
+        self.scaler = torch.amp.GradScaler(self._device_type, enabled=torch.cuda.is_available())
         self.best_auc = 0.0
         self.history: Dict[str, list] = {
             "train_loss": [], "val_loss": [], "val_auc": [], "val_f1": []
@@ -186,7 +207,7 @@ class Trainer:
         for imgs, labels in loader:
             imgs, labels = imgs.to(self.device), labels.to(self.device)
 
-            with autocast():
+            with torch.amp.autocast(self._device_type, enabled=torch.cuda.is_available()):
                 out = self.model(imgs)
                 loss = self.criterion(out["logit"], labels)
 
@@ -203,11 +224,19 @@ class Trainer:
             all_probs.extend(out["probability"].detach().cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
+            # Print progress every batch since CPU training is slow
+            batch_idx = len(all_labels) // imgs.size(0)
+            logger.info(f"  ... processed {len(all_labels)} / {len(loader.dataset)} images (Batch {batch_idx})")
+
         n = len(loader.dataset)
         avg_loss = total_loss / n
         all_probs  = np.array(all_probs)
         all_labels = np.array(all_labels)
-        auc = roc_auc_score(all_labels, all_probs) if not train else 0.0
+        try:
+            auc = roc_auc_score(all_labels, all_probs) if not train else 0.0
+        except ValueError:
+            # Raised when only one class is present in the batch (small datasets)
+            auc = 0.0
         f1  = f1_score(all_labels, (all_probs > 0.5).astype(int), zero_division=0)
 
         return {"loss": avg_loss, "auc": auc, "f1": f1}
@@ -223,14 +252,14 @@ class Trainer:
             train_dataset,
             batch_size=cfg["batch_size"],
             sampler=sampler,
-            num_workers=cfg.get("num_workers", 4),
-            pin_memory=True,
+            num_workers=cfg.get("num_workers", 0),
+            pin_memory=torch.cuda.is_available(),
         )
         val_loader = DataLoader(
             val_dataset,
             batch_size=cfg["batch_size"] * 2,
             shuffle=False,
-            num_workers=cfg.get("num_workers", 4),
+            num_workers=cfg.get("num_workers", 0),  # 0 required on Windows
         )
 
         save_dir = Path(cfg.get("save_dir", "checkpoints"))
@@ -285,15 +314,16 @@ class Trainer:
 
 
 def get_default_config() -> dict:
+    import torch
     return {
         "lr": 1e-4,
-        "epochs": 30,
-        "batch_size": 32,
+        "epochs": 20,
+        "batch_size": 8,          # smaller batch for CPU
         "weight_decay": 1e-4,
         "pretrained": True,
         "focal_alpha": 0.25,
         "focal_gamma": 2.0,
-        "num_workers": 4,
+        "num_workers": 0,          # 0 required on Windows
         "save_dir": "checkpoints",
         "save_every": 5,
     }

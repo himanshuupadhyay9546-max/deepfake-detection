@@ -28,9 +28,12 @@ def compute_metrics(
 ) -> Dict:
     """Compute full suite of binary classification metrics."""
     y_pred = (y_prob >= threshold).astype(int)
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
-    auc      = roc_auc_score(y_true, y_prob)
+    try:
+        auc = roc_auc_score(y_true, y_prob)
+    except ValueError:
+        auc = 0.0
     ap       = average_precision_score(y_true, y_prob)
     f1       = f1_score(y_true, y_pred, zero_division=0)
     acc      = accuracy_score(y_true, y_pred)

@@ -7,7 +7,6 @@ Inference & Explainability
 - Face detection + cropping
 """
 
-import io
 import cv2
 import numpy as np
 from pathlib import Path
@@ -93,7 +92,8 @@ class GradCAM:
     def _save_gradients(self, module, grad_input, grad_output):
         self.gradients = grad_output[0].detach()
 
-    def generate(self, x: torch.Tensor, class_idx: int = 0) -> np.ndarray:
+    def generate(self, x: torch.Tensor, class_idx: int = 0):
+        """Returns (cam: np.ndarray, out: dict) in a single forward+backward pass."""
         self.model.zero_grad()
         out = self.model(x)
         score = out["logit"][0]
@@ -106,7 +106,7 @@ class GradCAM:
                             mode="bilinear", align_corners=False)
         cam = cam.squeeze().cpu().numpy()
         cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-        return cam
+        return cam, out
 
     def overlay_heatmap(
         self, img_np: np.ndarray, cam: np.ndarray, alpha: float = 0.45
@@ -167,7 +167,7 @@ class DeepfakeInference:
 
         self.model = DeepfakeDetector(pretrained=model_path is None)
         if model_path and Path(model_path).exists():
-            state = torch.load(model_path, map_location=self.device)
+            state = torch.load(model_path, map_location=self.device, weights_only=True)
             if "model_state" in state:
                 state = state["model_state"]
             self.model.load_state_dict(state)
@@ -189,14 +189,13 @@ class DeepfakeInference:
         else:
             self.gradcam = None
 
-    @torch.no_grad()
     def _predict_tensor(self, x: torch.Tensor) -> Dict:
+        """Run a single forward pass. Uses no_grad when heatmap is not needed."""
         if self.generate_heatmap and self.gradcam:
-            x.requires_grad_(False)
-            with torch.enable_grad():
-                out = self.model(x)
-        else:
             out = self.model(x)
+        else:
+            with torch.no_grad():
+                out = self.model(x)
         return {k: v.cpu() for k, v in out.items()}
 
     def predict_image(
@@ -224,14 +223,11 @@ class DeepfakeInference:
         # Preprocess
         tensor = self.transform(img_pil).unsqueeze(0).to(self.device)
 
-        # Heatmap
+        # Heatmap — single forward+backward pass via generate()
         heatmap_overlay = None
         if self.generate_heatmap and self.gradcam:
             tensor.requires_grad_(True)
-            out = self.model(tensor)
-            logit = out["logit"]
-            logit.backward()
-            cam = self.gradcam.generate(tensor)
+            cam, out = self.gradcam.generate(tensor)  # one pass, returns both
             img_resized = np.array(img_pil.resize((self.image_size, self.image_size)))
             heatmap_overlay = self.gradcam.overlay_heatmap(img_resized, cam)
         else:
