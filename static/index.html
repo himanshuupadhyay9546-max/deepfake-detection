@@ -654,6 +654,118 @@
     .fade-up {
       animation: fadeUp .4s ease both
     }
+
+    /* ── API Settings Panel ── */
+    .api-settings-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 11px;
+      color: var(--text);
+      cursor: pointer;
+      font-family: var(--font);
+      transition: all 0.2s;
+    }
+
+    .api-settings-btn:hover {
+      border-color: var(--cyan);
+      box-shadow: 0 0 10px rgba(0, 212, 255, 0.15);
+    }
+
+    .api-settings-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      margin-bottom: 24px;
+      overflow: hidden;
+      animation: slideDown 0.3s ease-out;
+      text-align: left;
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .api-settings-content {
+      padding: 20px;
+    }
+
+    .api-settings-content h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    .api-settings-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+
+    .api-input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .api-input-group input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .api-input-group input:focus {
+      outline: none;
+      border-color: var(--cyan);
+      box-shadow: 0 0 8px rgba(0, 212, 255, 0.15);
+    }
+
+    .btn-api-reset {
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-api-reset:hover {
+      color: var(--text);
+      border-color: var(--border-hover);
+    }
+
+    .api-status-msg {
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .api-status-msg.success {
+      color: var(--green);
+    }
+
+    .api-status-msg.error {
+      color: var(--red);
+    }
   </style>
 </head>
 
@@ -669,9 +781,12 @@
             <div class="brand-tag">Media Authenticity Checker</div>
           </div>
         </div>
-        <div class="status-pill">
-          <div class="status-dot"></div>
-          System Ready
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button id="api-settings-btn" class="api-settings-btn" title="API Settings" onclick="toggleApiSettings()">⚙️ Settings</button>
+          <div class="status-pill">
+            <div class="status-dot"></div>
+            System Ready
+          </div>
         </div>
       </div>
     </div>
@@ -679,6 +794,21 @@
 
   <main>
     <div class="wrap">
+
+      <!-- API Settings Panel (collapsible) -->
+      <div id="api-settings-panel" class="api-settings-panel" style="display: none;">
+        <div class="api-settings-content">
+          <h3>⚙️ Backend API Configuration</h3>
+          <p class="api-settings-desc">Specify the backend API URL. If your API is running locally on port 8000, keep the default. Note: HTTPS pages require an HTTPS backend due to browser security (Mixed Content).</p>
+          <div class="api-input-group">
+            <input type="text" id="api-base-url" placeholder="e.g. http://localhost:8000" oninput="saveApiUrl()">
+            <button class="btn-api-reset" onclick="resetApiUrl()">Reset</button>
+          </div>
+          <div id="api-status-msg" class="api-status-msg">
+            Connecting to backend...
+          </div>
+        </div>
+      </div>
 
       <!-- Hero -->
       <section class="hero">
@@ -790,6 +920,70 @@
     let mode = 'image', currentFile = null;
     let sessionTotal = 0, sessionFake = 0, sessionReal = 0;
 
+    // API Configuration
+    const DEFAULT_API_URL = ''; // Default to relative (same origin)
+    let apiUrl = localStorage.getItem('api_base_url') || DEFAULT_API_URL;
+
+    // Set initial input value on load & check health
+    window.addEventListener('DOMContentLoaded', () => {
+      const input = document.getElementById('api-base-url');
+      if (input) {
+        input.value = apiUrl;
+      }
+      checkBackendHealth();
+    });
+
+    function toggleApiSettings() {
+      const panel = document.getElementById('api-settings-panel');
+      if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        checkBackendHealth();
+      } else {
+        panel.style.display = 'none';
+      }
+    }
+
+    function saveApiUrl() {
+      const input = document.getElementById('api-base-url');
+      let val = input.value.trim();
+      if (val) {
+        val = val.replace(/\/+$/, ''); // Strip trailing slashes
+      }
+      apiUrl = val;
+      localStorage.setItem('api_base_url', val);
+      checkBackendHealth();
+    }
+
+    function resetApiUrl() {
+      const input = document.getElementById('api-base-url');
+      input.value = DEFAULT_API_URL;
+      apiUrl = DEFAULT_API_URL;
+      localStorage.removeItem('api_base_url');
+      checkBackendHealth();
+    }
+
+    async function checkBackendHealth() {
+      const msgEl = document.getElementById('api-status-msg');
+      if (!msgEl) return;
+      msgEl.className = 'api-status-msg';
+      msgEl.textContent = 'Connecting to backend...';
+      
+      const baseUrl = apiUrl || window.location.origin;
+      try {
+        const res = await fetch(`${baseUrl}/api/health`);
+        if (res.ok) {
+          const data = await res.json();
+          msgEl.className = 'api-status-msg success';
+          msgEl.textContent = `🟢 Connected. Device: ${data.device || 'unknown'}`;
+        } else {
+          throw new Error();
+        }
+      } catch (err) {
+        msgEl.className = 'api-status-msg error';
+        msgEl.textContent = `🔴 Failed to connect to backend at ${baseUrl}`;
+      }
+    }
+
     function setMode(m) {
       mode = m;
       ['image', 'video'].forEach(x => {
@@ -838,7 +1032,8 @@
       try {
         const fd = new FormData();
         fd.append('file', currentFile);
-        const endpoint = mode === 'image' ? '/api/detect/image' : '/api/detect/video';
+        const baseUrl = apiUrl || '';
+        const endpoint = baseUrl + (mode === 'image' ? '/api/detect/image' : '/api/detect/video');
         const res = await fetch(endpoint, { method: 'POST', body: fd });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
